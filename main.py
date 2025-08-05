@@ -12,7 +12,7 @@ class DigitRecognitionGUI:
 
         # Canvas settings
         self.canvas_size = 280
-        self.grid_size = 14  # 14x14 grid for pattern matching
+        self.grid_size = 28  # 28x28 grid for pattern matching
         self.cell_size = self.canvas_size // self.grid_size
 
         # Drawing state
@@ -181,7 +181,7 @@ class DigitRecognitionGUI:
         self.undo_btn.config(state='disabled', bg='lightgray')
 
     def get_drawing_array(self):
-        """Convert drawing to 14x14 binary array"""
+        """Convert drawing to 28x28 binary array"""
         array = np.zeros((self.grid_size, self.grid_size), dtype=int)
         for x, y in self.drawn_pixels:
             array[y, x] = 1
