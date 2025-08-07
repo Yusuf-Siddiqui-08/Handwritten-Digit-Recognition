@@ -1,6 +1,7 @@
 import numpy as np
 import json
 import os
+import hashlib
 
 
 class DigitRecognizer:
@@ -16,14 +17,22 @@ class DigitRecognizer:
         # File for storing learned patterns
         self.learned_patterns_file = "learned_patterns.json"
 
+        # Pattern caching for performance optimization
+        self.cached_patterns = {}  # {digit: [{'array': np_array, 'confidence': float, 'feedback_count': int}]}
+        self.cache_valid = False   # Track if cache is valid
+
         # Initialize digit patterns
         self.digit_patterns = self.create_digit_patterns()
 
-        # Load learned patterns
+        # Load learned patterns and automatically remove duplicates
         self.learned_patterns = self.load_learned_patterns()
+        self.remove_duplicates_from_patterns()
+
+        # Build initial cache
+        self._rebuild_pattern_cache()
 
     def preprocess_drawing(self, array):
-        """Preprocess the drawing array to center and scale it appropriately"""
+        """Preprocess the drawing array with smart centering (no scaling)"""
         # Find the bounding box of the drawn pixels
         rows, cols = np.where(array > 0)
 
@@ -37,23 +46,108 @@ class DigitRecognizer:
         drawing_height = max_row - min_row + 1
         drawing_width = max_col - min_col + 1
 
-        # Calculate if the drawing is too small relative to canvas
+        # Calculate canvas utilization and center offset
         canvas_utilization = (drawing_height * drawing_width) / (self.grid_size * self.grid_size)
 
-        # If drawing uses less than 25% of the canvas, apply scaling and centering
-        if canvas_utilization < 0.25 or drawing_height < self.grid_size * 0.5 or drawing_width < self.grid_size * 0.5:
-            return self.center_and_scale_drawing(array, min_row, max_row, min_col, max_col)
-
-        # If drawing is reasonably sized, center it if it's off-center
         center_row = (min_row + max_row) / 2
         center_col = (min_col + max_col) / 2
         canvas_center = self.grid_size / 2
 
-        # If drawing is significantly off-center, center it
-        if abs(center_row - canvas_center) > 2 or abs(center_col - canvas_center) > 2:
-            return self.center_drawing(array, min_row, max_row, min_col, max_col)
+        center_offset = max(abs(center_row - canvas_center), abs(center_col - canvas_center))
 
+        # Apply centering for small drawings that are very off-center
+        # More generous thresholds since we removed scaling
+        if canvas_utilization < 0.15 and center_offset > 6:
+            return self.gentle_center_drawing(array, min_row, max_row, min_col, max_col)
+
+        # For all other cases, return the original drawing unchanged
         return array
+
+    def smart_crop_and_scale(self, array, min_row, max_row, min_col, max_col):
+        """Crop around the digit with padding, then scale up intelligently"""
+        drawing_height = max_row - min_row + 1
+        drawing_width = max_col - min_col + 1
+
+        # Add padding around the digit (2-3 pixels on each side)
+        padding = 3
+        crop_min_row = max(0, min_row - padding)
+        crop_max_row = min(self.grid_size - 1, max_row + padding)
+        crop_min_col = max(0, min_col - padding)
+        crop_max_col = min(self.grid_size - 1, max_col + padding)
+
+        # Extract the cropped region
+        cropped_height = crop_max_row - crop_min_row + 1
+        cropped_width = crop_max_col - crop_min_col + 1
+
+        # Create cropped array
+        cropped_array = array[crop_min_row:crop_max_row + 1, crop_min_col:crop_max_col + 1]
+
+        # Calculate scale factor to make the cropped region fill a good portion of the canvas
+        # Target: make the scaled digit use about 60-70% of the canvas
+        target_size = int(self.grid_size * 0.65)
+        scale_factor = target_size / max(cropped_height, cropped_width)
+
+        # Cap the scaling to prevent over-enlargement
+        scale_factor = min(scale_factor, 6.0)  # Allow more aggressive scaling for tiny digits
+
+        # Calculate new dimensions after scaling
+        new_height = int(cropped_height * scale_factor)
+        new_width = int(cropped_width * scale_factor)
+
+        # Center the scaled cropped region in the full canvas
+        start_row = max(0, (self.grid_size - new_height) // 2)
+        start_col = max(0, (self.grid_size - new_width) // 2)
+
+        # Create new array
+        new_array = np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+        # Apply scaling using nearest neighbor interpolation
+        for i in range(new_height):
+            for j in range(new_width):
+                # Map back to cropped coordinates
+                orig_row = int(i / scale_factor)
+                orig_col = int(j / scale_factor)
+
+                # Ensure we stay within bounds
+                if (start_row + i < self.grid_size and start_col + j < self.grid_size and
+                    orig_row < cropped_height and orig_col < cropped_width):
+                    new_array[start_row + i, start_col + j] = cropped_array[orig_row, orig_col]
+
+        return new_array
+
+    def gentle_center_drawing(self, array, min_row, max_row, min_col, max_col):
+        """Apply proper centering with full centering when triggered"""
+        drawing_height = max_row - min_row + 1
+        drawing_width = max_col - min_col + 1
+
+        # Calculate where the drawing should be positioned to be centered
+        canvas_center = self.grid_size / 2
+
+        # Calculate the top-left position to center the drawing
+        target_start_row = int(canvas_center - drawing_height / 2)
+        target_start_col = int(canvas_center - drawing_width / 2)
+
+        # Ensure the target position keeps the drawing within bounds
+        target_start_row = max(0, min(target_start_row, self.grid_size - drawing_height))
+        target_start_col = max(0, min(target_start_col, self.grid_size - drawing_width))
+
+        # Create new array
+        new_array = np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+        # Copy the drawing to the centered position
+        for i in range(drawing_height):
+            for j in range(drawing_width):
+                old_row = min_row + i
+                old_col = min_col + j
+                new_row = target_start_row + i
+                new_col = target_start_col + j
+
+                # Copy the pixel if both source and destination are valid
+                if (0 <= new_row < self.grid_size and 0 <= new_col < self.grid_size and
+                    0 <= old_row < self.grid_size and 0 <= old_col < self.grid_size):
+                    new_array[new_row, new_col] = array[old_row, old_col]
+
+        return new_array
 
     def center_and_scale_drawing(self, array, min_row, max_row, min_col, max_col):
         """Center and scale up a small drawing to better fill the canvas"""
@@ -115,207 +209,68 @@ class DigitRecognizer:
         return new_array
 
     def create_digit_patterns(self):
-        """Create predefined patterns for digits 0-9"""
-        patterns = {}
-
-        # Digit 0 patterns - scaled to 28x28
-        patterns[0] = [
-            # Pattern 1: Oval shape
-            np.array([
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0],
-                [0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
-                [0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0],
-                [0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0],
-                [0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0],
-                [0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0],
-                [0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0],
-                [0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0],
-                [1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1],
-                [1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1],
-                [0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0],
-                [0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0],
-                [0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0],
-                [0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0],
-                [0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0],
-                [0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0],
-                [0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
-                [0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-            ])
-        ]
-
-        # Digit 1 patterns - scaled to 28x28
-        patterns[1] = [
-            # Pattern 1: Straight line
-            np.array([
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
-                [0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-            ])
-        ]
-
-        # Digit 2 pattern - scaled to 28x28
-        patterns[2] = [
-            # Pattern 1: Classic 2 shape
-            np.array([
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0],
-                [0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
-                [0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0],
-                [1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
-                [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-            ])
-        ]
-
-        # Digit 3 pattern - scaled to 28x28
-        patterns[3] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        # Digit 4 pattern - scaled to 28x28
-        patterns[4] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        # Digit 5 pattern - scaled to 28x28
-        patterns[5] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        # Digit 6 pattern - scaled to 28x28
-        patterns[6] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        # Digit 7 pattern - scaled to 28x28
-        patterns[7] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        # Digit 8 pattern - scaled to 28x28
-        patterns[8] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        # Digit 9 pattern - scaled to 28x28
-        patterns[9] = [
-            np.zeros((28, 28), dtype=int)  # Placeholder - will be filled by learned patterns
-        ]
-
-        return patterns
+        """Create empty patterns dictionary - using only learned patterns"""
+        # Return empty dictionary since we're only using learned patterns
+        return {}
 
     def calculate_similarity(self, drawn_array, pattern):
-        """Calculate similarity between drawn array and pattern using multiple metrics optimized for 28x28"""
-        # Normalize both arrays to ensure they're binary
-        drawn_binary = (drawn_array > 0).astype(int)
-        pattern_binary = (pattern > 0).astype(int)
+        """Calculate similarity between drawn array and pattern using vectorized NumPy operations for optimal performance"""
+        # Normalize both arrays to ensure they're binary using vectorized operations
+        drawn_binary = (drawn_array > 0).astype(np.int8)  # Use int8 for memory efficiency
+        pattern_binary = (pattern > 0).astype(np.int8)
 
-        # Calculate intersection over union (IoU)
-        intersection = np.sum(drawn_binary & pattern_binary)
-        union = np.sum(drawn_binary | pattern_binary)
+        # Vectorized intersection and union calculations
+        intersection_array = drawn_binary & pattern_binary
+        union_array = drawn_binary | pattern_binary
+
+        intersection = np.sum(intersection_array)
+        union = np.sum(union_array)
 
         if union == 0:
             return 0.0
 
-        iou = intersection / union
-
-        # Calculate coverage (how much of the pattern is covered)
+        # Vectorized pixel counts
         pattern_pixels = np.sum(pattern_binary)
-        if pattern_pixels == 0:
-            return 0.0
-        coverage = intersection / pattern_pixels
-
-        # Calculate precision (how much of the drawing matches the pattern)
         drawn_pixels = np.sum(drawn_binary)
-        if drawn_pixels == 0:
+
+        if pattern_pixels == 0 or drawn_pixels == 0:
             return 0.0
+
+        # Calculate all metrics using vectorized operations
+        iou = intersection / union
+        coverage = intersection / pattern_pixels
         precision = intersection / drawn_pixels
 
-        # Calculate structural similarity using center of mass
-        structural_similarity = self.calculate_structural_similarity(drawn_binary, pattern_binary)
+        # Calculate structural similarity using vectorized center of mass
+        structural_similarity = self.calculate_structural_similarity_vectorized(drawn_binary, pattern_binary)
 
         # Enhanced weighted combination for 28x28 resolution
         similarity = 0.35 * iou + 0.25 * coverage + 0.25 * precision + 0.15 * structural_similarity
 
         return similarity
 
-    def calculate_structural_similarity(self, drawn_binary, pattern_binary):
-        """Calculate structural similarity based on center of mass and distribution"""
+    def calculate_structural_similarity_vectorized(self, drawn_binary, pattern_binary):
+        """Calculate structural similarity using fully vectorized NumPy operations"""
         try:
-            # Calculate center of mass for both patterns
-            drawn_coords = np.where(drawn_binary > 0)
-            pattern_coords = np.where(pattern_binary > 0)
+            # Use vectorized operations to find coordinates
+            drawn_coords = np.nonzero(drawn_binary)
+            pattern_coords = np.nonzero(pattern_binary)
 
             if len(drawn_coords[0]) == 0 or len(pattern_coords[0]) == 0:
                 return 0.0
 
-            # Center of mass
-            drawn_com = (np.mean(drawn_coords[0]), np.mean(drawn_coords[1]))
-            pattern_com = (np.mean(pattern_coords[0]), np.mean(pattern_coords[1]))
+            # Vectorized center of mass calculation
+            drawn_com = np.array([np.mean(drawn_coords[0]), np.mean(drawn_coords[1])])
+            pattern_com = np.array([np.mean(pattern_coords[0]), np.mean(pattern_coords[1])])
 
-            # Distance between centers of mass (normalized by grid size)
-            com_distance = np.sqrt((drawn_com[0] - pattern_com[0])**2 + (drawn_com[1] - pattern_com[1])**2)
+            # Vectorized distance calculation
+            com_diff = drawn_com - pattern_com
+            com_distance = np.sqrt(np.sum(com_diff ** 2))
             com_similarity = max(0, 1 - (com_distance / (self.grid_size * 0.5)))
 
-            # Calculate spread/variance similarity
-            drawn_spread = np.std(drawn_coords[0]) + np.std(drawn_coords[1])
-            pattern_spread = np.std(pattern_coords[0]) + np.std(pattern_coords[1])
+            # Vectorized spread calculation
+            drawn_spread = float(np.std(drawn_coords[0]) + np.std(drawn_coords[1]))
+            pattern_spread = float(np.std(pattern_coords[0]) + np.std(pattern_coords[1]))
 
             if pattern_spread > 0:
                 spread_ratio = min(drawn_spread, pattern_spread) / max(drawn_spread, pattern_spread)
@@ -330,50 +285,131 @@ class DigitRecognizer:
 
     def predict_digit(self, drawn_array):
         """
-        Predict the digit based on the drawing array.
-        Returns a tuple of (predicted_digit, confidence, all_similarities)
+        Predict the digit using cached patterns for optimal performance
         """
         try:
-            # Preprocess the drawing
+            # Preprocess the drawing once
             processed_array = self.preprocess_drawing(drawn_array)
 
-            best_digit = None
-            best_similarity = 0.0
-            similarities = {}
+            # Early exit if no patterns available
+            if not self.cached_patterns:
+                print("No cached patterns available for comparison")
+                return None, 0.0, {}
 
-            # Compare with all patterns (both predefined and learned)
-            for digit in range(10):
-                max_similarity_for_digit = 0.0
+            # Ensure cache is valid before prediction
+            self._ensure_cache_valid()
 
-                # Check predefined patterns
-                if digit in self.digit_patterns:
-                    for pattern in self.digit_patterns[digit]:
-                        similarity = self.calculate_similarity(processed_array, pattern)
-                        max_similarity_for_digit = max(max_similarity_for_digit, similarity)
+            # Use cached patterns for much faster processing
+            pattern_results = []
+            total_patterns = 0
 
-                # Check learned patterns and give them higher weight
-                digit_str = str(digit)
-                if digit_str in self.learned_patterns:
-                    for pattern_data in self.learned_patterns[digit_str]:
-                        try:
-                            learned_pattern = np.array(pattern_data['pattern'])
-                            learned_similarity = self.calculate_similarity(processed_array, learned_pattern)
-                            # Boost learned pattern similarity based on confidence and feedback
-                            confidence_boost = 1.0 + (pattern_data.get('confidence', 1.0) * 0.2)
-                            feedback_boost = 1.0 + (pattern_data.get('feedback_count', 1) * 0.1)
-                            learned_similarity *= confidence_boost * feedback_boost
-                            max_similarity_for_digit = max(max_similarity_for_digit, learned_similarity)
-                        except (ValueError, KeyError) as e:
-                            print(f"Error processing learned pattern for digit {digit}: {e}")
-                            continue
+            # Process all cached patterns directly
+            for digit, cached_patterns_list in self.cached_patterns.items():
+                for pattern_info in cached_patterns_list:
+                    total_patterns += 1
 
-                similarities[digit] = max_similarity_for_digit
+                    # Calculate both similarities using pre-converted arrays
+                    preprocessed_sim = self.calculate_similarity(processed_array, pattern_info['array'])
+                    raw_sim = self.calculate_similarity(drawn_array, pattern_info['array'])
 
-                if max_similarity_for_digit > best_similarity:
-                    best_similarity = max_similarity_for_digit
-                    best_digit = digit
+                    # Apply boosts once
+                    confidence_boost = 1.0 + (pattern_info['confidence'] * 0.2)
+                    feedback_boost = 1.0 + (pattern_info['feedback_count'] * 0.1)
+                    boost_factor = confidence_boost * feedback_boost
 
-            return best_digit, best_similarity, similarities
+                    # Store results if above threshold
+                    prep_boosted = preprocessed_sim * boost_factor
+                    raw_boosted = raw_sim * boost_factor
+
+                    if prep_boosted >= 0.05 or raw_boosted >= 0.05:  # Early filtering
+                        pattern_results.append({
+                            'digit': digit,
+                            'prep_similarity': prep_boosted,
+                            'raw_similarity': raw_boosted,
+                            'prep_raw': preprocessed_sim,
+                            'raw_raw': raw_sim
+                        })
+
+            if not pattern_results:
+                print("No patterns meet minimum similarity threshold")
+                return None, 0.0, {}
+
+            # Sort once by best overall similarity
+            pattern_results.sort(key=lambda x: max(x['prep_similarity'], x['raw_similarity']), reverse=True)
+
+            # Limit processing to top 30 patterns total (instead of 15 each)
+            top_patterns = pattern_results[:30]
+
+            # Build hashmaps efficiently
+            prep_stats = {}  # {digit: {'votes': count, 'sim_sum': total, 'max_sim': max}}
+            raw_stats = {}
+            combined_stats = {}
+
+            for pattern in top_patterns:
+                digit = pattern['digit']
+
+                # Preprocessed stats
+                if pattern['prep_similarity'] >= 0.05:
+                    if digit not in prep_stats:
+                        prep_stats[digit] = {'votes': 0, 'sim_sum': 0, 'max_sim': 0}
+                    prep_stats[digit]['votes'] += 1
+                    prep_stats[digit]['sim_sum'] += pattern['prep_similarity']
+                    prep_stats[digit]['max_sim'] = max(prep_stats[digit]['max_sim'], pattern['prep_similarity'])
+
+                # Raw stats
+                if pattern['raw_similarity'] >= 0.05:
+                    if digit not in raw_stats:
+                        raw_stats[digit] = {'votes': 0, 'sim_sum': 0, 'max_sim': 0}
+                    raw_stats[digit]['votes'] += 1
+                    raw_stats[digit]['sim_sum'] += pattern['raw_similarity']
+                    raw_stats[digit]['max_sim'] = max(raw_stats[digit]['max_sim'], pattern['raw_similarity'])
+
+                # Combined stats
+                if digit not in combined_stats:
+                    combined_stats[digit] = {'votes': 0, 'sim_sum': 0, 'max_sim': 0}
+                combined_stats[digit]['votes'] += 1
+                combined_stats[digit]['sim_sum'] += max(pattern['prep_similarity'], pattern['raw_similarity'])
+                combined_stats[digit]['max_sim'] = max(combined_stats[digit]['max_sim'],
+                                                      max(pattern['prep_similarity'], pattern['raw_similarity']))
+
+            # Calculate final scores efficiently
+            all_digits = set(prep_stats.keys()) | set(raw_stats.keys())
+            digit_scores = {}
+
+            for digit in all_digits:
+                # Get stats with defaults
+                prep = prep_stats.get(digit, {'votes': 0, 'sim_sum': 0, 'max_sim': 0})
+                raw = raw_stats.get(digit, {'votes': 0, 'sim_sum': 0, 'max_sim': 0})
+                combined = combined_stats.get(digit, {'votes': 0, 'sim_sum': 0, 'max_sim': 0})
+
+                # Calculate averages and weights efficiently
+                prep_avg = prep['sim_sum'] / prep['votes'] if prep['votes'] > 0 else 0
+                raw_avg = raw['sim_sum'] / raw['votes'] if raw['votes'] > 0 else 0
+                combined_avg = combined['sim_sum'] / combined['votes'] if combined['votes'] > 0 else 0
+
+                prep_vote_weight = min(prep['votes'] / 5.0, 1.0)
+                raw_vote_weight = min(raw['votes'] / 5.0, 1.0)
+                combined_vote_weight = min(combined['votes'] / 10.0, 1.0)
+
+                # Vectorized score calculation
+                prep_score = 0.7 * prep['max_sim'] + 0.2 * prep_avg + 0.1 * prep_vote_weight
+                raw_score = 0.7 * raw['max_sim'] + 0.2 * raw_avg + 0.1 * raw_vote_weight
+                combined_score = 0.7 * combined['max_sim'] + 0.2 * combined_avg + 0.1 * combined_vote_weight
+
+                digit_scores[digit] = 0.5 * prep_score + 0.2 * raw_score + 0.3 * combined_score
+
+            # Find best prediction
+            best_digit = max(digit_scores, key=digit_scores.get)
+            best_score = digit_scores[best_digit]
+
+            # Create final similarities dict
+            similarities = {digit: digit_scores.get(digit, 0.0) for digit in range(10)}
+
+            # Simplified logging (only when needed)
+            print(f"\nCached Analysis: {total_patterns} patterns, {len(top_patterns)} top matches")
+            print(f"Final scores: {dict(sorted(digit_scores.items()))}")
+
+            return best_digit, best_score, similarities
 
         except Exception as e:
             print(f"Prediction error: {e}")
@@ -388,14 +424,18 @@ class DigitRecognizer:
             if digit not in self.learned_patterns:
                 self.learned_patterns[digit] = []
 
-            # Add the current drawing as a learned pattern
+            # IMPORTANT: Preprocess the drawn array before saving
+            preprocessed_array = self.preprocess_drawing(drawn_array)
+
+            # Add the preprocessed drawing as a learned pattern
             pattern_data = {
-                'pattern': drawn_array.tolist(),
+                'pattern': preprocessed_array.tolist(),
                 'confidence': 1.0,
                 'feedback_count': 1
             }
 
             self.learned_patterns[digit].append(pattern_data)
+            self._invalidate_cache()  # Invalidate cache on new feedback
             return True
 
         except Exception as e:
@@ -411,15 +451,19 @@ class DigitRecognizer:
             if digit_str not in self.learned_patterns:
                 self.learned_patterns[digit_str] = []
 
-            # Add the current drawing as a learned pattern with the correct label
+            # IMPORTANT: Preprocess the drawn array before saving
+            preprocessed_array = self.preprocess_drawing(drawn_array)
+
+            # Add the preprocessed drawing as a learned pattern with the correct label
             pattern_data = {
-                'pattern': drawn_array.tolist(),
+                'pattern': preprocessed_array.tolist(),
                 'confidence': 1.0,
                 'feedback_count': 1,
                 'corrected_from': predicted_digit
             }
 
             self.learned_patterns[digit_str].append(pattern_data)
+            self._invalidate_cache()  # Invalidate cache on new feedback
             return True
 
         except Exception as e:
@@ -437,10 +481,68 @@ class DigitRecognizer:
                 if len(self.learned_patterns[digit_str]) == 0:
                     del self.learned_patterns[digit_str]
 
+                self._invalidate_cache()  # Invalidate cache on pattern removal
                 return True
             return False
         except Exception as e:
             print(f"Remove pattern error: {e}")
+            return False
+
+    def pattern_to_hash(self, pattern):
+        """Convert a pattern array to a hash for duplicate detection"""
+        # Convert pattern to string and hash it
+        pattern_str = str(pattern)
+        return hashlib.md5(pattern_str.encode()).hexdigest()
+
+    def remove_duplicates_from_patterns(self):
+        """Remove duplicate patterns from learned patterns automatically"""
+        try:
+            if not self.learned_patterns:
+                return False
+
+            duplicates_removed = 0
+            patterns_modified = False
+
+            # Process each digit
+            for digit, patterns in self.learned_patterns.items():
+                if not patterns:
+                    continue
+
+                original_count = len(patterns)
+
+                # Track unique patterns using hashes
+                seen_hashes = set()
+                unique_patterns = []
+
+                for pattern_data in patterns:
+                    if 'pattern' not in pattern_data:
+                        continue
+
+                    pattern = pattern_data['pattern']
+                    pattern_hash = self.pattern_to_hash(pattern)
+
+                    if pattern_hash not in seen_hashes:
+                        seen_hashes.add(pattern_hash)
+                        unique_patterns.append(pattern_data)
+                    else:
+                        duplicates_removed += 1
+
+                # Update if duplicates were found
+                if len(unique_patterns) != original_count:
+                    self.learned_patterns[digit] = unique_patterns
+                    patterns_modified = True
+                    print(f"Removed {original_count - len(unique_patterns)} duplicate patterns for digit {digit}")
+
+            # Save if any duplicates were removed
+            if patterns_modified:
+                print(f"Total duplicates removed: {duplicates_removed}")
+                self.save_learned_patterns()
+                return True
+
+            return False
+
+        except Exception as e:
+            print(f"Error removing duplicates: {e}")
             return False
 
     def load_learned_patterns(self):
@@ -567,3 +669,47 @@ class DigitRecognizer:
             for patterns in self.learned_patterns.values():
                 total += len(patterns)
             return total
+
+    def _invalidate_cache(self):
+        """Invalidate the pattern cache when patterns are modified"""
+        self.cache_valid = False
+
+    def _ensure_cache_valid(self):
+        """Ensure the cache is valid, rebuild if necessary"""
+        if not self.cache_valid:
+            self._rebuild_pattern_cache()
+
+    def _rebuild_pattern_cache(self):
+        """Rebuild the pattern cache from learned patterns"""
+        try:
+            self.cached_patterns = {}
+            self.cache_valid = False
+
+            # Convert all patterns to numpy arrays and cache them
+            for digit, patterns_list in self.learned_patterns.items():
+                digit_int = int(digit)
+                cached_list = []
+
+                for pattern_data in patterns_list:
+                    try:
+                        # Convert pattern to numpy array
+                        pattern_array = np.array(pattern_data['pattern'])
+
+                        # Cache the pattern with its metadata
+                        cached_list.append({
+                            'array': pattern_array,
+                            'confidence': pattern_data.get('confidence', 1.0),
+                            'feedback_count': pattern_data.get('feedback_count', 1)
+                        })
+                    except (ValueError, KeyError):
+                        continue
+
+                if cached_list:
+                    self.cached_patterns[digit_int] = cached_list
+
+            self.cache_valid = True
+            print(f"Pattern cache rebuilt: {sum(len(patterns) for patterns in self.cached_patterns.values())} patterns cached")
+
+        except Exception as e:
+            print(f"Error rebuilding pattern cache: {e}")
+            self.cache_valid = False

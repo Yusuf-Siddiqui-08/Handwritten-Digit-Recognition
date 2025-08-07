@@ -1,13 +1,174 @@
 import tkinter as tk
+from tkinter import messagebox
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 from DigitRecognizer import DigitRecognizer
+
+
+class DebugWindow:
+    """Separate window for debug settings and controls"""
+
+    def __init__(self, parent_gui):
+        self.parent_gui = parent_gui
+        self.window = None
+
+    def show_window(self):
+        """Create and show the debug window"""
+        if self.window is not None:
+            # If window already exists, just bring it to front
+            self.window.lift()
+            self.window.focus_force()
+            return
+
+        # Create new debug window
+        self.window = tk.Toplevel(self.parent_gui.root)
+        self.window.title("Debug Settings")
+        self.window.geometry("500x400")
+        self.window.configure(bg='lightgray')
+        self.window.transient(self.parent_gui.root)
+
+        # Handle window closing
+        self.window.protocol("WM_DELETE_WINDOW", self.close_window)
+
+        # Center the window
+        self.window.update_idletasks()
+        x = (self.window.winfo_screenwidth() // 2) - (self.window.winfo_width() // 2)
+        y = (self.window.winfo_screenheight() // 2) - (self.window.winfo_height() // 2)
+        self.window.geometry(f"+{x}+{y}")
+
+        self.setup_debug_gui()
+
+    def close_window(self):
+        """Close the debug window"""
+        if self.window:
+            self.window.destroy()
+            self.window = None
+
+    def setup_debug_gui(self):
+        """Set up the debug window GUI elements"""
+        # Title
+        title_label = tk.Label(self.window, text="Debug Settings",
+                              font=("Arial", 16, "bold"), bg='lightgray')
+        title_label.pack(pady=10)
+
+        # Array visualization settings
+        vis_frame = tk.Frame(self.window, bg='lightgray', relief='solid', borderwidth=1)
+        vis_frame.pack(pady=10, padx=10, fill=tk.X)
+
+        tk.Label(vis_frame, text="Array Visualization",
+                font=("Arial", 12, "bold"), bg='lightgray').pack(pady=5)
+
+        # Array visualization checkbox
+        array_vis_frame = tk.Frame(vis_frame, bg='lightgray')
+        array_vis_frame.pack(anchor=tk.W, padx=10, pady=5)
+
+        tk.Label(array_vis_frame, text="Show Array Visualization:",
+                font=("Arial", 10), bg='lightgray').pack(side=tk.LEFT)
+
+        self.array_visualization_checkbox = tk.Checkbutton(
+            array_vis_frame,
+            variable=self.parent_gui.array_visualization_enabled,
+            onvalue=True,
+            offvalue=False,
+            font=("Arial", 10),
+            bg='lightgray'
+        )
+        self.array_visualization_checkbox.pack(side=tk.LEFT, padx=5)
+
+        # Test visualization button
+        test_vis_btn = tk.Button(vis_frame, text="Test Array Visualization",
+                                command=self.test_array_visualization,
+                                font=("Arial", 10), bg='lightblue', width=20)
+        test_vis_btn.pack(pady=5)
+
+        # System information
+        info_frame = tk.Frame(self.window, bg='lightgray', relief='solid', borderwidth=1)
+        info_frame.pack(pady=10, padx=10, fill=tk.X)
+
+        tk.Label(info_frame, text="System Information",
+                font=("Arial", 12, "bold"), bg='lightgray').pack(pady=5)
+
+        # Pattern count
+        total_patterns = self.parent_gui.recognizer.get_pattern_count()
+        pattern_info = tk.Label(info_frame, text=f"Total learned patterns: {total_patterns}",
+                               font=("Arial", 10), bg='lightgray')
+        pattern_info.pack(pady=2)
+
+        # Feedback dropdown state
+        self.dropdown_state_label = tk.Label(info_frame, text="Feedback dropdown: Closed",
+                                             font=("Arial", 10), bg='lightgray', fg='gray')
+        self.dropdown_state_label.pack(pady=2)
+
+        # Pattern management
+        pattern_frame = tk.Frame(self.window, bg='lightgray', relief='solid', borderwidth=1)
+        pattern_frame.pack(pady=10, padx=10, fill=tk.X)
+
+        tk.Label(pattern_frame, text="Pattern Management",
+                font=("Arial", 12, "bold"), bg='lightgray').pack(pady=5)
+
+        # Remove duplicates button
+        remove_dup_btn = tk.Button(pattern_frame, text="Remove Duplicate Patterns",
+                                  command=self.remove_duplicates,
+                                  font=("Arial", 10), bg='orange', width=25)
+        remove_dup_btn.pack(pady=5)
+
+        # Pattern details by digit
+        details_frame = tk.Frame(pattern_frame, bg='lightgray')
+        details_frame.pack(pady=5, fill=tk.X)
+
+        tk.Label(details_frame, text="Patterns per digit:",
+                font=("Arial", 10, "bold"), bg='lightgray').pack()
+
+        # Show pattern count for each digit
+        for digit in range(10):
+            count = self.parent_gui.recognizer.get_pattern_count(digit)
+            if count > 0:
+                digit_label = tk.Label(details_frame, text=f"Digit {digit}: {count} patterns",
+                                      font=("Arial", 9), bg='lightgray')
+                digit_label.pack()
+
+        # Close button
+        close_btn = tk.Button(self.window, text="Close", command=self.close_window,
+                             font=("Arial", 12), bg='lightcoral', width=12)
+        close_btn.pack(pady=20)
+
+    def test_array_visualization(self):
+        """Test the array visualization with a sample pattern"""
+        # Create a simple test pattern
+        test_array = np.zeros((28, 28), dtype=int)
+        # Draw a simple digit-like pattern
+        test_array[10:18, 10:15] = 1  # Vertical line
+        test_array[14:16, 10:18] = 1  # Horizontal line
+
+        self.parent_gui.visualize_array(test_array, "Test Pattern (Sample)")
+
+    def remove_duplicates(self):
+        """Remove duplicate patterns and update display"""
+        try:
+            removed = self.parent_gui.recognizer.remove_duplicates_from_patterns()
+            if removed:
+                # Refresh the debug window to show updated counts
+                if self.window:
+                    self.window.destroy()
+                    self.window = None
+                    self.show_window()
+            else:
+                tk.messagebox.showinfo("No Duplicates", "No duplicate patterns found.")
+        except Exception as e:
+            tk.messagebox.showerror("Error", f"Error removing duplicates: {e}")
+
+    def update_dropdown_state(self, state):
+        """Update the dropdown state display"""
+        if self.window and hasattr(self, 'dropdown_state_label'):
+            self.dropdown_state_label.config(text=f"Feedback dropdown: {state}")
 
 
 class DigitRecognitionGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Handwritten Digit Recognition")
-        self.root.geometry("500x750")
+        self.root.geometry("500x750")  # Increased height from 650 to 750
         self.root.configure(bg='lightgray')
 
         # Canvas settings
@@ -30,114 +191,78 @@ class DigitRecognitionGUI:
         # Dropdown state for feedback
         self.feedback_dropdown_open = False
 
+        # Debug settings
+        self.array_visualization_enabled = tk.BooleanVar(value=False)  # Default: disabled
+
+        # Initialize debug window
+        self.debug_window = DebugWindow(self)
+
         # Initialize the digit recognizer
         self.recognizer = DigitRecognizer()
 
         # Create GUI elements
         self.setup_gui()
 
-    def setup_gui(self):
-        # Title
-        title_label = tk.Label(self.root, text="Draw a Digit (0-9)",
-                              font=("Arial", 16, "bold"), bg='lightgray')
-        title_label.pack(pady=10)
+    def visualize_array(self, array, title="Binary Array Visualization"):
+        """Visualize a 28x28 binary array using matplotlib"""
+        try:
+            fig, ax = plt.subplots(1, 1, figsize=(8, 8))
 
-        # Canvas frame
-        canvas_frame = tk.Frame(self.root, bg='black', bd=2)
-        canvas_frame.pack(pady=10)
+            # Create a grid visualization
+            for i in range(array.shape[0]):
+                for j in range(array.shape[1]):
+                    if array[i, j] == 1:
+                        # Draw filled square for 1s (black)
+                        rect = Rectangle((j, array.shape[0]-1-i), 1, 1,
+                                       facecolor='black', edgecolor='gray', linewidth=0.5)
+                        ax.add_patch(rect)
+                    else:
+                        # Draw empty square for 0s (white)
+                        rect = Rectangle((j, array.shape[0]-1-i), 1, 1,
+                                       facecolor='white', edgecolor='gray', linewidth=0.5)
+                        ax.add_patch(rect)
 
-        # Drawing canvas
-        self.canvas = tk.Canvas(canvas_frame, width=self.canvas_size, height=self.canvas_size,
-                               bg='white', cursor='pencil')
-        self.canvas.pack(padx=2, pady=2)
+            ax.set_xlim(0, array.shape[1])
+            ax.set_ylim(0, array.shape[0])
+            ax.set_aspect('equal')
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            ax.set_xlabel(f'Columns (0-{array.shape[1]-1})')
+            ax.set_ylabel(f'Rows (0-{array.shape[0]-1})')
 
-        # Bind mouse events for drawing
-        self.canvas.bind("<Button-1>", self.start_drawing)
-        self.canvas.bind("<B1-Motion>", self.draw)
-        self.canvas.bind("<ButtonRelease-1>", self.stop_drawing)
+            # Add grid
+            ax.set_xticks(range(0, array.shape[1]+1, 4))
+            ax.set_yticks(range(0, array.shape[0]+1, 4))
+            ax.grid(True, alpha=0.3)
 
-        # Buttons frame
-        button_frame = tk.Frame(self.root, bg='lightgray')
-        button_frame.pack(pady=10)
+            plt.tight_layout()
+            plt.show()
 
-        # Clear button
-        clear_btn = tk.Button(button_frame, text="Clear", command=self.clear_canvas,
-                             font=("Arial", 12), bg='lightcoral', width=15)
-        clear_btn.pack(side="left", padx=10)
+        except Exception as e:
+            print(f"Error visualizing array: {e}")
 
-        # Predict button
-        predict_btn = tk.Button(button_frame, text="Predict", command=self.predict_digit,
-                               font=("Arial", 12), bg='lightgreen', width=15)
-        predict_btn.pack(side="left", padx=10)
+    def print_array_info(self, array, title="Array Information"):
+        """Print detailed information about the array"""
+        print(f"\n{title}")
+        print("=" * len(title))
+        print(f"Array shape: {array.shape}")
+        print(f"Non-zero pixels: {np.sum(array)}")
+        print(f"Zero pixels: {np.sum(array == 0)}")
+        print(f"Total pixels: {array.size}")
+        print(f"Fill percentage: {(np.sum(array) / array.size) * 100:.1f}%")
 
-        # Prediction result frame
-        result_frame = tk.Frame(self.root, bg='white', bd=2, relief='solid')
-        result_frame.pack(pady=20, padx=50, fill='x')
+        # Find bounding box
+        rows, cols = np.where(array > 0)
+        if len(rows) > 0:
+            min_row, max_row = rows.min(), rows.max()
+            min_col, max_col = cols.min(), cols.max()
+            print(f"Bounding box: rows {min_row}-{max_row}, cols {min_col}-{max_col}")
+            print(f"Drawing size: {max_row - min_row + 1} x {max_col - min_col + 1}")
+        else:
+            print("No drawn pixels found")
 
-        # Prediction label
-        tk.Label(result_frame, text="Prediction:", font=("Arial", 12, "bold"),
-                bg='white').pack(pady=5)
-
-        self.prediction_label = tk.Label(result_frame, text="Draw a digit and click Predict",
-                                        font=("Arial", 24, "bold"), bg='white', fg='blue')
-        self.prediction_label.pack(pady=10)
-
-        # Confidence label
-        self.confidence_label = tk.Label(result_frame, text="",
-                                        font=("Arial", 10), bg='white', fg='gray')
-        self.confidence_label.pack(pady=5)
-
-        # Feedback container frame (always visible when there's a prediction)
-        self.feedback_container = tk.Frame(result_frame, bg='white')
-
-        # Dropdown button for feedback (initially hidden)
-        self.dropdown_btn = tk.Button(self.feedback_container, text="▼ Feedback Options",
-                                     command=self.toggle_feedback_dropdown,
-                                     font=("Arial", 12), bg='lightblue', width=20)
-        self.dropdown_btn.pack(pady=5)
-
-        # Feedback frame (collapsible content - initially hidden)
-        self.feedback_frame = tk.Frame(self.feedback_container, bg='white')
-
-        # Feedback question
-        feedback_question = tk.Label(self.feedback_frame, text="Was this prediction correct?",
-                                   font=("Arial", 12), bg='white', fg='black')
-        feedback_question.pack(pady=(10, 5))
-
-        # Feedback buttons frame
-        feedback_buttons_frame = tk.Frame(self.feedback_frame, bg='white')
-        feedback_buttons_frame.pack(pady=5)
-
-        # Thumbs up button
-        self.thumbs_up_btn = tk.Button(feedback_buttons_frame, text="👍 Correct",
-                                      command=self.positive_feedback,
-                                      font=("Arial", 12), bg='lightgreen',
-                                      width=12, relief='raised')
-        self.thumbs_up_btn.pack(side="left", padx=10)
-
-        # Thumbs down button
-        self.thumbs_down_btn = tk.Button(feedback_buttons_frame, text="👎 Wrong",
-                                        command=self.negative_feedback,
-                                        font=("Arial", 12), bg='lightcoral',
-                                        width=12, relief='raised')
-        self.thumbs_down_btn.pack(side="left", padx=10)
-
-        # Undo button (initially hidden)
-        self.undo_btn = tk.Button(feedback_buttons_frame, text="↶ Undo",
-                                 command=self.undo_feedback,
-                                 font=("Arial", 12), bg='lightyellow',
-                                 width=12, relief='raised', state='disabled')
-        self.undo_btn.pack(side="left", padx=10)
-
-        # Feedback status label
-        self.feedback_status_label = tk.Label(self.feedback_frame, text="",
-                                             font=("Arial", 10), bg='white', fg='green')
-        self.feedback_status_label.pack(pady=5)
-
-        # Initially hide the feedback frame (dropdown content)
-        # Don't pack the feedback_frame yet - it will be shown/hidden by dropdown
-
-        # Don't pack the feedback_container yet - it will be shown when there's a prediction
+        print("\nBinary Array:")
+        print(array)
+        print()
 
     def start_drawing(self, event):
         self.drawing = True
@@ -181,10 +306,48 @@ class DigitRecognitionGUI:
         self.undo_btn.config(state='disabled', bg='lightgray')
 
     def get_drawing_array(self):
-        """Convert drawing to 28x28 binary array"""
+        """Convert drawing to 28x28 binary array with improved coverage detection"""
         array = np.zeros((self.grid_size, self.grid_size), dtype=int)
-        for x, y in self.drawn_pixels:
-            array[y, x] = 1
+
+        # Create a higher resolution coverage map first
+        coverage_map = np.zeros((self.grid_size, self.grid_size), dtype=float)
+
+        # Get all canvas items (the drawn circles)
+        canvas_items = self.canvas.find_all()
+
+        for item in canvas_items:
+            # Get the bounding box of each drawn circle
+            coords = self.canvas.coords(item)
+            if len(coords) == 4:  # oval coordinates: x1, y1, x2, y2
+                x1, y1, x2, y2 = coords
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
+                radius = (x2 - x1) / 2
+
+                # Check which grid cells this circle affects
+                for grid_y in range(self.grid_size):
+                    for grid_x in range(self.grid_size):
+                        # Calculate the center of this grid cell in canvas coordinates
+                        cell_center_x = (grid_x + 0.5) * self.cell_size
+                        cell_center_y = (grid_y + 0.5) * self.cell_size
+
+                        # Calculate distance from circle center to cell center
+                        distance = np.sqrt((center_x - cell_center_x)**2 + (center_y - cell_center_y)**2)
+
+                        # If the circle overlaps with this cell, add coverage
+                        if distance <= radius + (self.cell_size * 0.7):  # Allow some overlap
+                            # Calculate coverage strength based on distance
+                            coverage_strength = max(0, 1 - (distance / (radius + self.cell_size * 0.5)))
+                            coverage_map[grid_y, grid_x] += coverage_strength
+
+        # Convert coverage map to binary array with threshold
+        # Lower threshold makes it more likely to register as 1
+        threshold = 0.3  # Adjust this value: lower = more sensitive
+        for y in range(self.grid_size):
+            for x in range(self.grid_size):
+                if coverage_map[y, x] >= threshold:
+                    array[y, x] = 1
+
         return array
 
     def predict_digit(self):
@@ -192,7 +355,7 @@ class DigitRecognitionGUI:
         try:
             # Check if canvas is empty
             if not self.drawn_pixels:
-                self.prediction_label.config(text="����� Canvas is empty!", fg='red')
+                self.prediction_label.config(text="❌ Canvas is empty!", fg='red')
                 self.confidence_label.config(text="Please draw a digit first")
                 self.hide_feedback_buttons()
                 return
@@ -207,14 +370,32 @@ class DigitRecognitionGUI:
             drawn_array = self.get_drawing_array()
             self.last_drawn_array = drawn_array
 
+            # Only print and visualize arrays if debug mode is enabled
+            if self.array_visualization_enabled.get():
+                self.print_array_info(drawn_array, "Raw Drawing Array")
+
+                # Get preprocessed array from recognizer
+                processed_array = self.recognizer.preprocess_drawing(drawn_array)
+                self.print_array_info(processed_array, "Preprocessed Array")
+
+                # Visualize both arrays
+                self.visualize_array(drawn_array, "Raw Drawing (28x28 Grid)")
+                self.visualize_array(processed_array, "Preprocessed Drawing (Centered/Scaled)")
+
             # Use the recognizer to predict
             best_digit, best_similarity, similarities = self.recognizer.predict_digit(drawn_array)
 
             # Store the prediction for feedback
             self.last_prediction = best_digit
 
+            # Print prediction details
+            print(f"\nPrediction Results:")
+            print(f"Best digit: {best_digit}")
+            print(f"Best similarity: {best_similarity:.4f}")
+            print(f"All similarities: {similarities}")
+
             # Display result with better error handling
-            if best_digit is not None and best_similarity > 0.05:  # Lowered threshold for better detection
+            if best_digit is not None and best_similarity > 0.05: # Lowered threshold for better detection
                 self.prediction_label.config(text=f"Predicted Digit: {best_digit}", fg='blue')
                 confidence_percent = min(int(best_similarity * 100), 99)  # Cap at 99%
                 self.confidence_label.config(text=f"Confidence: {confidence_percent}%", fg='gray')
@@ -428,11 +609,16 @@ class DigitRecognitionGUI:
             self.feedback_frame.pack_forget()
             self.feedback_dropdown_open = False
             self.dropdown_btn.config(text="▼ Feedback Options")
+            state = "Closed"
         else:
             # Open the dropdown
             self.feedback_frame.pack(pady=10)
             self.feedback_dropdown_open = True
             self.dropdown_btn.config(text="▲ Feedback Options")
+            state = "Open"
+
+        # Update debug window if it's open
+        self.debug_window.update_dropdown_state(state)
 
     def undo_feedback(self):
         """Undo the last feedback action"""
@@ -493,6 +679,104 @@ class DigitRecognitionGUI:
         except Exception as e:
             self.feedback_status_label.config(text=f"❌ Undo error: {str(e)}", fg='red')
             print(f"Undo error: {e}")
+
+    def setup_gui(self):
+        """Set up all GUI elements"""
+        # Title
+        title_label = tk.Label(self.root, text="Handwritten Digit Recognition",
+                              font=("Arial", 16, "bold"), bg='lightgray')
+        title_label.pack(pady=10)
+
+        # Instructions
+        instructions = tk.Label(self.root, text="Draw a digit in the box below and click Predict",
+                               font=("Arial", 12), bg='lightgray')
+        instructions.pack(pady=5)
+
+        # Drawing canvas
+        self.canvas = tk.Canvas(self.root, width=self.canvas_size, height=self.canvas_size,
+                               bg='white', relief='solid', borderwidth=2)
+        self.canvas.pack(pady=20)
+
+        # Bind mouse events for drawing
+        self.canvas.bind("<Button-1>", self.start_drawing)
+        self.canvas.bind("<B1-Motion>", self.draw)
+        self.canvas.bind("<ButtonRelease-1>", self.stop_drawing)
+
+        # Button frame
+        button_frame = tk.Frame(self.root, bg='lightgray')
+        button_frame.pack(pady=10)
+
+        # Predict button
+        predict_btn = tk.Button(button_frame, text="Predict", command=self.predict_digit,
+                               font=("Arial", 12, "bold"), bg='lightblue', width=10)
+        predict_btn.pack(side=tk.LEFT, padx=5)
+
+        # Clear button
+        clear_btn = tk.Button(button_frame, text="Clear", command=self.clear_canvas,
+                             font=("Arial", 12), bg='lightyellow', width=10)
+        clear_btn.pack(side=tk.LEFT, padx=5)
+
+        # Debug button
+        debug_btn = tk.Button(button_frame, text="Debug", command=self.debug_window.show_window,
+                             font=("Arial", 12), bg='lightsteelblue', width=10)
+        debug_btn.pack(side=tk.LEFT, padx=5)
+
+        # Prediction result
+        self.prediction_label = tk.Label(self.root, text="Draw a digit and click Predict",
+                                        font=("Arial", 14, "bold"), bg='lightgray', fg='black')
+        self.prediction_label.pack(pady=10)
+
+        # Confidence label
+        self.confidence_label = tk.Label(self.root, text="", font=("Arial", 10), bg='lightgray')
+        self.confidence_label.pack()
+
+        # Feedback container (initially hidden)
+        self.feedback_container = tk.Frame(self.root, bg='lightgray')
+        # Don't pack initially - will be shown when prediction is made
+
+        # Dropdown button for feedback options
+        self.dropdown_btn = tk.Button(self.feedback_container, text="▼ Feedback Options",
+                                     command=self.toggle_feedback_dropdown,
+                                     font=("Arial", 11, "bold"), bg='lightsteelblue', width=20)
+        self.dropdown_btn.pack(pady=5)
+
+        # Feedback options frame (dropdown content)
+        self.feedback_frame = tk.Frame(self.feedback_container, bg='lightgray', relief='solid', borderwidth=1)
+        # Don't pack initially - will be shown when dropdown is opened
+
+        # Feedback buttons
+        feedback_btn_frame = tk.Frame(self.feedback_frame, bg='lightgray')
+        feedback_btn_frame.pack(pady=5)
+
+        self.thumbs_up_btn = tk.Button(feedback_btn_frame, text="👍 Correct",
+                                      command=self.positive_feedback,
+                                      font=("Arial", 10, "bold"), bg='lightgreen', width=12)
+        self.thumbs_up_btn.pack(side=tk.LEFT, padx=5)
+
+        self.thumbs_down_btn = tk.Button(feedback_btn_frame, text="👎 Wrong",
+                                        command=self.negative_feedback,
+                                        font=("Arial", 10, "bold"), bg='lightcoral', width=12)
+        self.thumbs_down_btn.pack(side=tk.LEFT, padx=5)
+
+        # Undo button
+        self.undo_btn = tk.Button(self.feedback_frame, text="↶ Undo Last Feedback",
+                                 command=self.undo_feedback,
+                                 font=("Arial", 10), bg='lightgray', width=20, state='disabled')
+        self.undo_btn.pack(pady=5)
+
+        # Feedback status label
+        self.feedback_status_label = tk.Label(self.root, text="", font=("Arial", 10),
+                                             bg='lightgray', wraplength=400)
+        self.feedback_status_label.pack(pady=5)
+
+        # Pattern count display (moved to bottom)
+        pattern_count_frame = tk.Frame(self.root, bg='lightgray')
+        pattern_count_frame.pack(side=tk.BOTTOM, pady=10)
+
+        total_patterns = self.recognizer.get_pattern_count()
+        pattern_info = tk.Label(pattern_count_frame, text=f"Total learned patterns: {total_patterns}",
+                               font=("Arial", 9), bg='lightgray', fg='gray')
+        pattern_info.pack()
 
 
 def main():
