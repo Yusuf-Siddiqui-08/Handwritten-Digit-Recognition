@@ -2,6 +2,8 @@ import numpy as np
 import json
 import os
 import hashlib
+import gzip
+import base64
 
 
 class DigitRecognizer:
@@ -16,6 +18,10 @@ class DigitRecognizer:
 
         # File for storing learned patterns
         self.learned_patterns_file = "learned_patterns.json"
+
+        # Storage optimization settings
+        self.use_sparse_encoding = True  # Use sparse array encoding to save space
+        self.use_compression = True      # Use gzip compression for storage
 
         # Pattern caching for performance optimization
         self.cached_patterns = {}  # {digit: [{'array': np_array, 'confidence': float, 'feedback_count': int}]}
@@ -427,9 +433,15 @@ class DigitRecognizer:
             # IMPORTANT: Preprocess the drawn array before saving
             preprocessed_array = self.preprocess_drawing(drawn_array)
 
-            # Add the preprocessed drawing as a learned pattern
+            # Optimize pattern storage based on compression settings
+            if self.use_sparse_encoding:
+                optimized_pattern = self.optimize_pattern_for_storage(preprocessed_array)
+            else:
+                optimized_pattern = preprocessed_array.tolist()
+
+            # Add the optimized pattern as a learned pattern
             pattern_data = {
-                'pattern': preprocessed_array.tolist(),
+                'pattern': optimized_pattern,
                 'confidence': 1.0,
                 'feedback_count': 1
             }
@@ -454,9 +466,15 @@ class DigitRecognizer:
             # IMPORTANT: Preprocess the drawn array before saving
             preprocessed_array = self.preprocess_drawing(drawn_array)
 
-            # Add the preprocessed drawing as a learned pattern with the correct label
+            # Optimize pattern storage based on compression settings
+            if self.use_sparse_encoding:
+                optimized_pattern = self.optimize_pattern_for_storage(preprocessed_array)
+            else:
+                optimized_pattern = preprocessed_array.tolist()
+
+            # Add the optimized pattern as a learned pattern with the correct label
             pattern_data = {
-                'pattern': preprocessed_array.tolist(),
+                'pattern': optimized_pattern,
                 'confidence': 1.0,
                 'feedback_count': 1,
                 'corrected_from': predicted_digit
@@ -558,8 +576,9 @@ class DigitRecognizer:
                             if isinstance(patterns, list):
                                 for pattern_data in patterns:
                                     if isinstance(pattern_data, dict) and 'pattern' in pattern_data:
-                                        # Pattern data is valid
-                                        continue
+                                        # Decompress pattern if compressed
+                                        if isinstance(pattern_data['pattern'], str) and len(pattern_data['pattern']) > 0:
+                                            pattern_data['pattern'] = self.decompress_pattern(pattern_data['pattern'])
                                     else:
                                         print(f"Invalid pattern data for digit {digit}")
                         return data
@@ -692,8 +711,15 @@ class DigitRecognizer:
 
                 for pattern_data in patterns_list:
                     try:
-                        # Convert pattern to numpy array
-                        pattern_array = np.array(pattern_data['pattern'])
+                        pattern = pattern_data['pattern']
+
+                        # Handle different storage formats
+                        if isinstance(pattern, dict) and 'type' in pattern:
+                            # This is an optimized storage format
+                            pattern_array = self.restore_pattern_from_storage(pattern)
+                        else:
+                            # This is a regular array format
+                            pattern_array = np.array(pattern)
 
                         # Cache the pattern with its metadata
                         cached_list.append({
@@ -701,7 +727,8 @@ class DigitRecognizer:
                             'confidence': pattern_data.get('confidence', 1.0),
                             'feedback_count': pattern_data.get('feedback_count', 1)
                         })
-                    except (ValueError, KeyError):
+                    except (ValueError, KeyError) as e:
+                        print(f"Error processing pattern for digit {digit}: {e}")
                         continue
 
                 if cached_list:
@@ -713,3 +740,223 @@ class DigitRecognizer:
         except Exception as e:
             print(f"Error rebuilding pattern cache: {e}")
             self.cache_valid = False
+
+    def compress_pattern(self, pattern):
+        """Compress a pattern using gzip and base64 encoding"""
+        try:
+            # Convert pattern to bytes
+            pattern_bytes = json.dumps(pattern).encode('utf-8')
+
+            # Compress using gzip
+            compressed_bytes = gzip.compress(pattern_bytes)
+
+            # Encode to base64 for storage
+            compressed_base64 = base64.b64encode(compressed_bytes).decode('utf-8')
+
+            return compressed_base64
+        except Exception as e:
+            print(f"Error compressing pattern: {e}")
+            return pattern  # Return uncompressed on error
+
+    def decompress_pattern(self, compressed_pattern):
+        """Decompress a pattern from gzip and base64 encoding"""
+        try:
+            # Decode from base64
+            compressed_bytes = base64.b64decode(compressed_pattern)
+
+            # Decompress using gzip
+            pattern_bytes = gzip.decompress(compressed_bytes)
+
+            # Convert bytes back to pattern
+            pattern = json.loads(pattern_bytes.decode('utf-8'))
+
+            return pattern
+        except Exception as e:
+            print(f"Error decompressing pattern: {e}")
+            return compressed_pattern  # Return uncompressed on error
+
+    def array_to_sparse(self, array):
+        """Convert a 28x28 array to sparse format storing only non-zero coordinates"""
+        try:
+            # Find all non-zero positions
+            rows, cols = np.where(array > 0)
+
+            if len(rows) == 0:
+                return []  # Empty pattern
+
+            # Store as list of [row, col] coordinates
+            sparse_coords = [[int(r), int(c)] for r, c in zip(rows, cols)]
+            return sparse_coords
+        except Exception as e:
+            print(f"Error converting to sparse: {e}")
+            return array.tolist()  # Fallback to full array
+
+    def sparse_to_array(self, sparse_coords):
+        """Convert sparse coordinates back to 28x28 array"""
+        try:
+            if not sparse_coords:
+                return np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+            array = np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+            # Set pixels at stored coordinates
+            for coord in sparse_coords:
+                if len(coord) == 2:
+                    row, col = coord
+                    if 0 <= row < self.grid_size and 0 <= col < self.grid_size:
+                        array[row, col] = 1
+
+            return array
+        except Exception as e:
+            print(f"Error converting from sparse: {e}")
+            return np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+    def run_length_encode(self, array):
+        """Apply run-length encoding to array rows for better compression"""
+        try:
+            encoded_rows = []
+
+            for row in array:
+                encoded_row = []
+                current_val = row[0]
+                count = 1
+
+                for i in range(1, len(row)):
+                    if row[i] == current_val:
+                        count += 1
+                    else:
+                        encoded_row.append([current_val, count])
+                        current_val = row[i]
+                        count = 1
+
+                # Add the last run
+                encoded_row.append([current_val, count])
+                encoded_rows.append(encoded_row)
+
+            return encoded_rows
+        except Exception as e:
+            print(f"Error in run-length encoding: {e}")
+            return array.tolist()
+
+    def run_length_decode(self, encoded_rows):
+        """Decode run-length encoded rows back to array"""
+        try:
+            decoded_array = []
+
+            for encoded_row in encoded_rows:
+                decoded_row = []
+                for val, count in encoded_row:
+                    decoded_row.extend([val] * count)
+
+                # Ensure row is exactly grid_size length
+                if len(decoded_row) == self.grid_size:
+                    decoded_array.append(decoded_row)
+                else:
+                    # Fallback for corrupted data
+                    decoded_array.append([0] * self.grid_size)
+
+            return np.array(decoded_array, dtype=int)
+        except Exception as e:
+            print(f"Error in run-length decoding: {e}")
+            return np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+    def optimize_pattern_for_storage(self, pattern_array):
+        """Choose the best compression method for a pattern"""
+        try:
+            # Calculate sparsity (percentage of non-zero pixels)
+            total_pixels = self.grid_size * self.grid_size
+            non_zero_pixels = np.sum(pattern_array > 0)
+            sparsity = non_zero_pixels / total_pixels
+
+            # For very sparse patterns (< 15% filled), use sparse encoding
+            if sparsity < 0.15:
+                sparse_coords = self.array_to_sparse(pattern_array)
+                return {
+                    'type': 'sparse',
+                    'data': sparse_coords,
+                    'size': len(sparse_coords) * 2  # Each coord is 2 integers
+                }
+
+            # For denser patterns, try run-length encoding
+            rle_encoded = self.run_length_encode(pattern_array)
+            rle_size = sum(len(row) * 2 for row in rle_encoded)  # Each run is [val, count]
+
+            # Compare with full array size
+            full_size = total_pixels
+
+            if rle_size < full_size * 0.7:  # Use RLE if it saves at least 30%
+                return {
+                    'type': 'rle',
+                    'data': rle_encoded,
+                    'size': rle_size
+                }
+
+            # Fallback to full array (but compressed)
+            compressed_data = self.compress_array_data(pattern_array.tolist())
+            return {
+                'type': 'compressed',
+                'data': compressed_data,
+                'size': len(compressed_data)
+            }
+
+        except Exception as e:
+            print(f"Error optimizing pattern: {e}")
+            return {
+                'type': 'full',
+                'data': pattern_array.tolist(),
+                'size': total_pixels
+            }
+
+    def compress_array_data(self, array_data):
+        """Compress array data using gzip and base64"""
+        try:
+            # Convert to JSON bytes
+            json_bytes = json.dumps(array_data, separators=(',', ':')).encode('utf-8')
+
+            # Compress with gzip
+            compressed_bytes = gzip.compress(json_bytes, compresslevel=9)
+
+            # Encode to base64 string
+            compressed_str = base64.b64encode(compressed_bytes).decode('utf-8')
+
+            return compressed_str
+        except Exception as e:
+            print(f"Error compressing array data: {e}")
+            return array_data
+
+    def decompress_array_data(self, compressed_str):
+        """Decompress gzip+base64 encoded array data"""
+        try:
+            # Decode from base64
+            compressed_bytes = base64.b64decode(compressed_str.encode('utf-8'))
+
+            # Decompress with gzip
+            json_bytes = gzip.decompress(compressed_bytes)
+
+            # Parse JSON
+            array_data = json.loads(json_bytes.decode('utf-8'))
+
+            return array_data
+        except Exception as e:
+            print(f"Error decompressing array data: {e}")
+            return []
+
+    def restore_pattern_from_storage(self, pattern_storage):
+        """Restore a pattern array from its optimized storage format"""
+        try:
+            storage_type = pattern_storage.get('type', 'full')
+            data = pattern_storage.get('data', [])
+
+            if storage_type == 'sparse':
+                return self.sparse_to_array(data)
+            elif storage_type == 'rle':
+                return self.run_length_decode(data)
+            elif storage_type == 'compressed':
+                array_data = self.decompress_array_data(data)
+                return np.array(array_data, dtype=int)
+            else:  # 'full' or unknown
+                return np.array(data, dtype=int) if data else np.zeros((self.grid_size, self.grid_size), dtype=int)
+
+        except Exception as e:
+            print(f"Error restoring pattern: {e}")
+            return np.zeros((self.grid_size, self.grid_size), dtype=int)
