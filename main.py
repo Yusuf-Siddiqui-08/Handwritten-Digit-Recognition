@@ -13,6 +13,39 @@ class DebugWindow:
         self.parent_gui = parent_gui
         self.window = None
 
+    def apply_theme(self):
+        """Apply the current theme to the debug window"""
+        if not self.window:
+            return
+
+        theme = self.parent_gui.get_current_theme()
+        self.window.configure(bg=theme['bg'])
+
+        # Update all child widgets
+        for widget in self.window.winfo_children():
+            self._update_widget_theme(widget, theme)
+
+    def _update_widget_theme(self, widget, theme):
+        """Recursively update widget themes"""
+        try:
+            widget_class = widget.winfo_class()
+            if widget_class in ['Label', 'Button', 'Frame', 'Checkbutton']:
+                if widget_class == 'Button':
+                    # Don't change button colors if they have specific colors
+                    current_bg = widget.cget('bg')
+                    if current_bg in ['lightblue', 'orange', 'lightcoral']:
+                        pass  # Keep special button colors
+                    else:
+                        widget.configure(bg=theme['button_bg'], fg=theme['fg'])
+                else:
+                    widget.configure(bg=theme['bg'], fg=theme['fg'])
+        except tk.TclError:
+            pass  # Some widgets might not support these options
+
+        # Recursively update children
+        for child in widget.winfo_children():
+            self._update_widget_theme(child, theme)
+
     def show_window(self):
         """Create and show the debug window"""
         if self.window is not None:
@@ -25,7 +58,8 @@ class DebugWindow:
         self.window = tk.Toplevel(self.parent_gui.root)
         self.window.title("Debug Settings")
         self.window.geometry("500x400")
-        self.window.configure(bg='lightgray')
+        theme = self.parent_gui.get_current_theme()
+        self.window.configure(bg=theme['bg'])
         self.window.transient(self.parent_gui.root)
 
         # Handle window closing
@@ -47,24 +81,26 @@ class DebugWindow:
 
     def setup_debug_gui(self):
         """Set up the debug window GUI elements"""
+        theme = self.parent_gui.get_current_theme()
+
         # Title
         title_label = tk.Label(self.window, text="Debug Settings",
-                              font=("Arial", 16, "bold"), bg='lightgray')
+                              font=("Arial", 16, "bold"), bg=theme['bg'], fg=theme['fg'])
         title_label.pack(pady=10)
 
         # Array visualization settings
-        vis_frame = tk.Frame(self.window, bg='lightgray', relief='solid', borderwidth=1)
+        vis_frame = tk.Frame(self.window, bg=theme['bg'], relief='solid', borderwidth=1)
         vis_frame.pack(pady=10, padx=10, fill=tk.X)
 
         tk.Label(vis_frame, text="Array Visualization",
-                font=("Arial", 12, "bold"), bg='lightgray').pack(pady=5)
+                font=("Arial", 12, "bold"), bg=theme['bg'], fg=theme['fg']).pack(pady=5)
 
         # Array visualization checkbox
-        array_vis_frame = tk.Frame(vis_frame, bg='lightgray')
+        array_vis_frame = tk.Frame(vis_frame, bg=theme['bg'])
         array_vis_frame.pack(anchor=tk.W, padx=10, pady=5)
 
         tk.Label(array_vis_frame, text="Show Array Visualization:",
-                font=("Arial", 10), bg='lightgray').pack(side=tk.LEFT)
+                font=("Arial", 10), bg=theme['bg'], fg=theme['fg']).pack(side=tk.LEFT)
 
         self.array_visualization_checkbox = tk.Checkbutton(
             array_vis_frame,
@@ -72,7 +108,7 @@ class DebugWindow:
             onvalue=True,
             offvalue=False,
             font=("Arial", 10),
-            bg='lightgray'
+            bg=theme['bg'], fg=theme['fg']
         )
         self.array_visualization_checkbox.pack(side=tk.LEFT, padx=5)
 
@@ -83,29 +119,29 @@ class DebugWindow:
         test_vis_btn.pack(pady=5)
 
         # System information
-        info_frame = tk.Frame(self.window, bg='lightgray', relief='solid', borderwidth=1)
+        info_frame = tk.Frame(self.window, bg=theme['bg'], relief='solid', borderwidth=1)
         info_frame.pack(pady=10, padx=10, fill=tk.X)
 
         tk.Label(info_frame, text="System Information",
-                font=("Arial", 12, "bold"), bg='lightgray').pack(pady=5)
+                font=("Arial", 12, "bold"), bg=theme['bg'], fg=theme['fg']).pack(pady=5)
 
         # Pattern count
         total_patterns = self.parent_gui.recognizer.get_pattern_count()
         pattern_info = tk.Label(info_frame, text=f"Total learned patterns: {total_patterns}",
-                               font=("Arial", 10), bg='lightgray')
+                               font=("Arial", 10), bg=theme['bg'], fg=theme['fg'])
         pattern_info.pack(pady=2)
 
         # Feedback dropdown state
         self.dropdown_state_label = tk.Label(info_frame, text="Feedback dropdown: Closed",
-                                             font=("Arial", 10), bg='lightgray', fg='gray')
+                                             font=("Arial", 10), bg=theme['bg'], fg='gray')
         self.dropdown_state_label.pack(pady=2)
 
         # Pattern management
-        pattern_frame = tk.Frame(self.window, bg='lightgray', relief='solid', borderwidth=1)
+        pattern_frame = tk.Frame(self.window, bg=theme['bg'], relief='solid', borderwidth=1)
         pattern_frame.pack(pady=10, padx=10, fill=tk.X)
 
         tk.Label(pattern_frame, text="Pattern Management",
-                font=("Arial", 12, "bold"), bg='lightgray').pack(pady=5)
+                font=("Arial", 12, "bold"), bg=theme['bg'], fg=theme['fg']).pack(pady=5)
 
         # Remove duplicates button
         remove_dup_btn = tk.Button(pattern_frame, text="Remove Duplicate Patterns",
@@ -114,18 +150,18 @@ class DebugWindow:
         remove_dup_btn.pack(pady=5)
 
         # Pattern details by digit
-        details_frame = tk.Frame(pattern_frame, bg='lightgray')
+        details_frame = tk.Frame(pattern_frame, bg=theme['bg'])
         details_frame.pack(pady=5, fill=tk.X)
 
         tk.Label(details_frame, text="Patterns per digit:",
-                font=("Arial", 10, "bold"), bg='lightgray').pack()
+                font=("Arial", 10, "bold"), bg=theme['bg'], fg=theme['fg']).pack()
 
         # Show pattern count for each digit
         for digit in range(10):
             count = self.parent_gui.recognizer.get_pattern_count(digit)
             if count > 0:
                 digit_label = tk.Label(details_frame, text=f"Digit {digit}: {count} patterns",
-                                      font=("Arial", 9), bg='lightgray')
+                                      font=("Arial", 9), bg=theme['bg'], fg=theme['fg'])
                 digit_label.pack()
 
         # Close button
@@ -169,7 +205,23 @@ class DigitRecognitionGUI:
         self.root = root
         self.root.title("Handwritten Digit Recognition")
         self.root.geometry("500x750")  # Increased height from 650 to 750
-        self.root.configure(bg='lightgray')
+
+        # Theme management
+        self.is_dark_mode = False  # Start with light mode
+        self.themes = {
+            'light': {
+                'bg': 'lightgray',
+                'fg': 'black',
+                'button_bg': 'lightgray',
+                'canvas_bg': 'white'
+            },
+            'dark': {
+                'bg': '#2b2b2b',
+                'fg': 'white',
+                'button_bg': '#404040',
+                'canvas_bg': '#1e1e1e'
+            }
+        }
 
         # Canvas settings
         self.canvas_size = 280
@@ -179,6 +231,7 @@ class DigitRecognitionGUI:
         # Drawing state
         self.drawing = False
         self.drawn_pixels = set()
+        self.canvas_items = []  # Track all drawn items for theme switching
         self.last_prediction = None
         self.last_drawn_array = None
         self.feedback_given = False  # Track if feedback has been provided
@@ -202,6 +255,195 @@ class DigitRecognitionGUI:
 
         # Create GUI elements
         self.setup_gui()
+
+        # Apply initial theme after all widgets are created
+        self.apply_theme()
+
+    def get_current_theme(self):
+        """Get the current theme dictionary"""
+        return self.themes['dark'] if self.is_dark_mode else self.themes['light']
+
+    def toggle_theme(self):
+        """Toggle between light and dark themes"""
+        self.is_dark_mode = not self.is_dark_mode
+        self.apply_theme()
+
+        # Update debug window theme if it's open
+        if self.debug_window.window:
+            self.debug_window.apply_theme()
+
+    def apply_theme(self):
+        """Apply the current theme to all widgets"""
+        theme = self.get_current_theme()
+
+        # Apply to root window
+        self.root.configure(bg=theme['bg'])
+
+        # Update all existing widgets if they exist
+        if hasattr(self, 'title_label'):
+            self._update_all_widgets()
+
+    def _update_all_widgets(self):
+        """Update all widgets with current theme"""
+        theme = self.get_current_theme()
+
+        # Update main widgets
+        widgets_to_update = [
+            self.title_label, self.instructions, self.prediction_label,
+            self.confidence_label, self.feedback_status_label
+        ]
+
+        for widget in widgets_to_update:
+            if widget.winfo_exists():
+                widget.configure(bg=theme['bg'], fg=theme['fg'])
+
+        # Update frames
+        frames_to_update = [
+            self.button_frame, self.feedback_container, self.feedback_frame,
+            self.feedback_btn_frame, self.pattern_count_frame
+        ]
+
+        for frame in frames_to_update:
+            if frame.winfo_exists():
+                frame.configure(bg=theme['bg'])
+
+        # Update pattern info label specifically
+        if hasattr(self, 'pattern_info') and self.pattern_info.winfo_exists():
+            if self.is_dark_mode:
+                # In dark mode: make text white and remove any background/border
+                self.pattern_info.configure(
+                    bg=theme['bg'], 
+                    fg='white',
+                    relief='flat',
+                    highlightthickness=0,
+                    bd=0
+                )
+            else:
+                # In light mode: keep as is
+                self.pattern_info.configure(
+                    bg=theme['bg'], 
+                    fg='gray',
+                    relief='flat',
+                    highlightthickness=0,
+                    bd=0
+                )
+
+        # Update canvas background
+        if self.canvas.winfo_exists():
+            self.canvas.configure(bg=theme['canvas_bg'])
+
+        # Update buttons (keeping special colors for certain buttons)
+        special_color_buttons = {
+            self.predict_btn: 'lightblue',
+            self.clear_btn: 'lightyellow',
+            self.debug_btn: 'lightsteelblue',
+            self.dropdown_btn: 'lightsteelblue',
+            self.thumbs_up_btn: 'lightgreen',
+            self.thumbs_down_btn: 'lightcoral'
+        }
+
+        for button, special_color in special_color_buttons.items():
+            if button.winfo_exists():
+                if self.is_dark_mode:
+                    # Darken the special colors for dark mode
+                    dark_colors = {
+                        'lightblue': '#4A90E2',
+                        'lightyellow': '#F5A623',
+                        'lightsteelblue': '#5A9FD4',
+                        'lightgreen': '#7ED321',
+                        'lightcoral': '#D0021B'
+                    }
+                    # Remove white boxes by setting all border/highlight properties
+                    button.configure(
+                        bg=dark_colors.get(special_color, special_color),
+                        fg='black',
+                        relief='flat',
+                        highlightbackground=theme['bg'],
+                        highlightcolor=theme['bg'],
+                        highlightthickness=0,
+                        bd=0
+                    )
+                else:
+                    # Light mode - remove borders completely
+                    button.configure(
+                        bg=special_color,
+                        fg='black',
+                        relief='flat',
+                        highlightbackground=theme['bg'],
+                        highlightcolor=theme['bg'],
+                        highlightthickness=0,
+                        bd=0
+                    )
+
+        # Update the top frame background
+        if hasattr(self, 'top_frame') and self.top_frame.winfo_exists():
+            self.top_frame.configure(bg=theme['bg'])
+
+        # Update the undo button separately as it changes dynamically
+        if self.undo_btn.winfo_exists():
+            if self.undo_btn['state'] == 'disabled':
+                button_bg = '#505050' if self.is_dark_mode else 'lightgray'
+            else:
+                button_bg = '#F5A623' if self.is_dark_mode else 'lightyellow'
+
+            # Remove white boxes for undo button too
+            self.undo_btn.configure(
+                bg=button_bg,
+                fg='black',
+                relief='flat',
+                highlightbackground=theme['bg'],
+                highlightcolor=theme['bg'],
+                highlightthickness=0,
+                bd=0
+            )
+
+        # Update canvas border color based on theme
+        if self.canvas.winfo_exists():
+            if self.is_dark_mode:
+                self.canvas.configure(bg=theme['canvas_bg'], highlightbackground='black',
+                                    highlightcolor='black', highlightthickness=2)
+            else:
+                self.canvas.configure(bg=theme['canvas_bg'], highlightbackground='black',
+                                    highlightcolor='black', highlightthickness=0)
+
+        # Update theme toggle button
+        if hasattr(self, 'theme_toggle_btn') and self.theme_toggle_btn.winfo_exists():
+            if self.is_dark_mode:
+                self.theme_toggle_btn.configure(
+                    text="☀️",
+                    bg='#404040',
+                    fg='white',
+                    relief='flat',
+                    highlightbackground=theme['bg'],
+                    highlightcolor=theme['bg'],
+                    highlightthickness=0,
+                    bd=0
+                )
+            else:
+                self.theme_toggle_btn.configure(
+                    text="🌙",
+                    bg='lightgray',
+                    fg='black',
+                    relief='flat',
+                    highlightbackground=theme['bg'],
+                    highlightcolor=theme['bg'],
+                    highlightthickness=0,
+                    bd=0
+                )
+
+        # Update all canvas items to match the new theme
+        self._update_canvas_item_colors()
+
+    def _update_canvas_item_colors(self):
+        """Update the colors of all canvas drawing items to match the current theme"""
+        # Get the appropriate pen color for the current theme
+        pen_color = 'white' if self.is_dark_mode else 'black'
+
+        # Update all canvas items (drawn circles)
+        canvas_items = self.canvas.find_all()
+        for item in canvas_items:
+            # Update the fill and outline colors of each canvas item
+            self.canvas.itemconfig(item, fill=pen_color, outline=pen_color)
 
     def visualize_array(self, array, title="Binary Array Visualization"):
         """Visualize a 28x28 binary array using matplotlib"""
@@ -271,15 +513,26 @@ class DigitRecognitionGUI:
     def draw(self, event):
         if self.drawing:
             x, y = event.x, event.y
-            # Draw a small circle
+            # Draw a small circle with theme-appropriate color
             radius = 8
-            self.canvas.create_oval(x-radius, y-radius, x+radius, y+radius,
-                                   fill='black', outline='black')
+            theme = self.get_current_theme()
+            pen_color = 'white' if self.is_dark_mode else 'black'
 
-            # Store drawn pixels for pattern matching
+            # Create an oval (circle) on the canvas
+            oval = self.canvas.create_oval(x-radius, y-radius, x+radius, y+radius,
+                                          fill=pen_color, outline=pen_color)
+
+            # Store drawn pixel and associated canvas item for tracking
             grid_x = min(x // self.cell_size, self.grid_size - 1)
             grid_y = min(y // self.cell_size, self.grid_size - 1)
             self.drawn_pixels.add((grid_x, grid_y))
+
+            # Track the canvas item with its color for theme updates
+            self.canvas_items.append({
+                'type': 'oval',
+                'widget': oval,
+                'color': pen_color
+            })
 
     def stop_drawing(self, event):
         self.drawing = False
@@ -287,6 +540,7 @@ class DigitRecognitionGUI:
     def clear_canvas(self):
         self.canvas.delete("all")
         self.drawn_pixels.clear()
+        self.canvas_items.clear()  # Clear the canvas items tracking list
         self.prediction_label.config(text="Draw a digit and click Predict")
         self.confidence_label.config(text="")
         self.hide_feedback_buttons()
@@ -396,7 +650,9 @@ class DigitRecognitionGUI:
 
             # Display result with better error handling
             if best_digit is not None and best_similarity > 0.05: # Lowered threshold for better detection
-                self.prediction_label.config(text=f"Predicted Digit: {best_digit}", fg='blue')
+                # Use standard theme color for prediction text instead of blue
+                theme = self.get_current_theme()
+                self.prediction_label.config(text=f"Predicted Digit: {best_digit}", fg=theme['fg'])
                 confidence_percent = min(int(best_similarity * 100), 99)  # Cap at 99%
                 self.confidence_label.config(text=f"Confidence: {confidence_percent}%", fg='gray')
 
@@ -554,7 +810,7 @@ class DigitRecognitionGUI:
                         fg='red'
                     )
             else:
-                self.feedback_status_label.config(text="❌ Error adding correction", fg='red')
+                self.feedback_status_label.config(text="�� Error adding correction", fg='red')
 
             dialog.destroy()
 
@@ -564,22 +820,64 @@ class DigitRecognitionGUI:
 
     def update_feedback_buttons(self):
         """Update the appearance of feedback buttons based on feedback state"""
+        theme = self.get_current_theme()
+
         if self.feedback_given:
             if self.feedback_type == 'positive':
-                self.thumbs_up_btn.config(bg='darkgreen', state='disabled', relief='sunken')
-                self.thumbs_down_btn.config(bg='lightgray', state='disabled', relief='flat')
+                # Use theme-appropriate disabled colors
+                disabled_bg = '#404040' if self.is_dark_mode else 'lightgray'
+                self.thumbs_up_btn.config(
+                    bg='darkgreen', fg='black', state='disabled', relief='sunken',
+                    highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                    highlightthickness=0, bd=0
+                )
+                self.thumbs_down_btn.config(
+                    bg=disabled_bg, fg='black', state='disabled', relief='flat',
+                    highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                    highlightthickness=0, bd=0
+                )
             elif self.feedback_type == 'negative':
-                self.thumbs_up_btn.config(bg='lightgray', state='disabled', relief='flat')
-                self.thumbs_down_btn.config(bg='darkred', state='disabled', relief='sunken')
+                disabled_bg = '#404040' if self.is_dark_mode else 'lightgray'
+                self.thumbs_up_btn.config(
+                    bg=disabled_bg, fg='black', state='disabled', relief='flat',
+                    highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                    highlightthickness=0, bd=0
+                )
+                self.thumbs_down_btn.config(
+                    bg='darkred', fg='black', state='disabled', relief='sunken',
+                    highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                    highlightthickness=0, bd=0
+                )
 
             # Enable undo button when feedback is given
             if self.undo_available:
-                self.undo_btn.config(state='normal', bg='lightyellow')
+                undo_bg = '#F5A623' if self.is_dark_mode else 'lightyellow'
+                self.undo_btn.config(
+                    state='normal', bg=undo_bg, fg='black',
+                    highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                    highlightthickness=0, bd=0
+                )
         else:
-            # Reset to normal state
-            self.thumbs_up_btn.config(bg='lightgreen', state='normal', relief='raised')
-            self.thumbs_down_btn.config(bg='lightcoral', state='normal', relief='raised')
-            self.undo_btn.config(state='disabled', bg='lightgray')
+            # Reset to normal state with theme-appropriate colors
+            up_bg = '#7ED321' if self.is_dark_mode else 'lightgreen'
+            down_bg = '#D0021B' if self.is_dark_mode else 'lightcoral'
+            disabled_bg = '#505050' if self.is_dark_mode else 'lightgray'
+
+            self.thumbs_up_btn.config(
+                bg=up_bg, fg='black', state='normal', relief='raised',
+                highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                highlightthickness=0, bd=0
+            )
+            self.thumbs_down_btn.config(
+                bg=down_bg, fg='black', state='normal', relief='raised',
+                highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                highlightthickness=0, bd=0
+            )
+            self.undo_btn.config(
+                state='disabled', bg=disabled_bg, fg='black',
+                highlightbackground=theme['bg'], highlightcolor=theme['bg'],
+                highlightthickness=0, bd=0
+            )
 
     def show_feedback_buttons(self):
         """Show the feedback dropdown button and reset feedback state"""
@@ -682,15 +980,24 @@ class DigitRecognitionGUI:
 
     def setup_gui(self):
         """Set up all GUI elements"""
-        # Title
-        title_label = tk.Label(self.root, text="Handwritten Digit Recognition",
+        # Create a top frame for title and theme toggle
+        self.top_frame = tk.Frame(self.root, bg='lightgray')
+        self.top_frame.pack(fill=tk.X, pady=10)
+
+        # Title (centered in top frame)
+        self.title_label = tk.Label(self.top_frame, text="Handwritten Digit Recognition",
                               font=("Arial", 16, "bold"), bg='lightgray')
-        title_label.pack(pady=10)
+        self.title_label.pack(expand=True)  # Center the title properly
+
+        # Theme toggle button (positioned absolutely in top right)
+        self.theme_toggle_btn = tk.Button(self.top_frame, text="🌙", command=self.toggle_theme,
+                                         font=("Arial", 12, "bold"), bg='lightgray', width=3, height=1)
+        self.theme_toggle_btn.place(relx=1.0, rely=0.5, anchor='e', x=-10)  # Position in top right
 
         # Instructions
-        instructions = tk.Label(self.root, text="Draw a digit in the box below and click Predict",
+        self.instructions = tk.Label(self.root, text="Draw a digit in the box below and click Predict",
                                font=("Arial", 12), bg='lightgray')
-        instructions.pack(pady=5)
+        self.instructions.pack(pady=5)
 
         # Drawing canvas
         self.canvas = tk.Canvas(self.root, width=self.canvas_size, height=self.canvas_size,
@@ -703,23 +1010,23 @@ class DigitRecognitionGUI:
         self.canvas.bind("<ButtonRelease-1>", self.stop_drawing)
 
         # Button frame
-        button_frame = tk.Frame(self.root, bg='lightgray')
-        button_frame.pack(pady=10)
+        self.button_frame = tk.Frame(self.root, bg='lightgray')
+        self.button_frame.pack(pady=10)
 
         # Predict button
-        predict_btn = tk.Button(button_frame, text="Predict", command=self.predict_digit,
+        self.predict_btn = tk.Button(self.button_frame, text="Predict", command=self.predict_digit,
                                font=("Arial", 12, "bold"), bg='lightblue', width=10)
-        predict_btn.pack(side=tk.LEFT, padx=5)
+        self.predict_btn.pack(side=tk.LEFT, padx=5)
 
         # Clear button
-        clear_btn = tk.Button(button_frame, text="Clear", command=self.clear_canvas,
+        self.clear_btn = tk.Button(self.button_frame, text="Clear", command=self.clear_canvas,
                              font=("Arial", 12), bg='lightyellow', width=10)
-        clear_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_btn.pack(side=tk.LEFT, padx=5)
 
         # Debug button
-        debug_btn = tk.Button(button_frame, text="Debug", command=self.debug_window.show_window,
+        self.debug_btn = tk.Button(self.button_frame, text="Debug", command=self.debug_window.show_window,
                              font=("Arial", 12), bg='lightsteelblue', width=10)
-        debug_btn.pack(side=tk.LEFT, padx=5)
+        self.debug_btn.pack(side=tk.LEFT, padx=5)
 
         # Prediction result
         self.prediction_label = tk.Label(self.root, text="Draw a digit and click Predict",
@@ -745,15 +1052,15 @@ class DigitRecognitionGUI:
         # Don't pack initially - will be shown when dropdown is opened
 
         # Feedback buttons
-        feedback_btn_frame = tk.Frame(self.feedback_frame, bg='lightgray')
-        feedback_btn_frame.pack(pady=5)
+        self.feedback_btn_frame = tk.Frame(self.feedback_frame, bg='lightgray')
+        self.feedback_btn_frame.pack(pady=5)
 
-        self.thumbs_up_btn = tk.Button(feedback_btn_frame, text="👍 Correct",
+        self.thumbs_up_btn = tk.Button(self.feedback_btn_frame, text="👍 Correct",
                                       command=self.positive_feedback,
                                       font=("Arial", 10, "bold"), bg='lightgreen', width=12)
         self.thumbs_up_btn.pack(side=tk.LEFT, padx=5)
 
-        self.thumbs_down_btn = tk.Button(feedback_btn_frame, text="👎 Wrong",
+        self.thumbs_down_btn = tk.Button(self.feedback_btn_frame, text="👎 Wrong",
                                         command=self.negative_feedback,
                                         font=("Arial", 10, "bold"), bg='lightcoral', width=12)
         self.thumbs_down_btn.pack(side=tk.LEFT, padx=5)
@@ -770,13 +1077,14 @@ class DigitRecognitionGUI:
         self.feedback_status_label.pack(pady=5)
 
         # Pattern count display (moved to bottom)
-        pattern_count_frame = tk.Frame(self.root, bg='lightgray')
-        pattern_count_frame.pack(side=tk.BOTTOM, pady=10)
+        self.pattern_count_frame = tk.Frame(self.root, bg='lightgray')
+        self.pattern_count_frame.pack(side=tk.BOTTOM, pady=10)
 
         total_patterns = self.recognizer.get_pattern_count()
-        pattern_info = tk.Label(pattern_count_frame, text=f"Total learned patterns: {total_patterns}",
+        self.pattern_info = tk.Label(self.pattern_count_frame, text=f"Total learned patterns: {total_patterns}",
                                font=("Arial", 9), bg='lightgray', fg='gray')
-        pattern_info.pack()
+        self.pattern_info.pack()
+
 
 
 def main():
