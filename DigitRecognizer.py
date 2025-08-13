@@ -16,12 +16,15 @@ class DigitRecognizer:
         # Grid settings for pattern matching
         self.grid_size = 28  # 28x28 grid for pattern matching
 
-        # File for storing learned patterns
-        self.learned_patterns_file = "learned_patterns.json"
+        # File for storing learned patterns (absolute path relative to this file)
+        self.learned_patterns_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learned_patterns.json")
 
         # Storage optimization settings
         self.use_sparse_encoding = True  # Use sparse array encoding to save space
         self.use_compression = True      # Use gzip compression for storage
+
+        # Dirty flag to avoid accidental overwrites when nothing changed
+        self._dirty = False
 
         # Pattern caching for performance optimization
         self.cached_patterns = {}  # {digit: [{'array': np_array, 'confidence': float, 'feedback_count': int}]}
@@ -448,6 +451,7 @@ class DigitRecognizer:
 
             self.learned_patterns[digit].append(pattern_data)
             self._invalidate_cache()  # Invalidate cache on new feedback
+            self._dirty = True
             return True
 
         except Exception as e:
@@ -482,6 +486,7 @@ class DigitRecognizer:
 
             self.learned_patterns[digit_str].append(pattern_data)
             self._invalidate_cache()  # Invalidate cache on new feedback
+            self._dirty = True
             return True
 
         except Exception as e:
@@ -500,6 +505,7 @@ class DigitRecognizer:
                     del self.learned_patterns[digit_str]
 
                 self._invalidate_cache()  # Invalidate cache on pattern removal
+                self._dirty = True
                 return True
             return False
         except Exception as e:
@@ -554,6 +560,7 @@ class DigitRecognizer:
             # Save if any duplicates were removed
             if patterns_modified:
                 print(f"Total duplicates removed: {duplicates_removed}")
+                self._dirty = True
                 self.save_learned_patterns()
                 return True
 
@@ -605,9 +612,20 @@ class DigitRecognizer:
             return {}
 
     def save_learned_patterns(self):
-        """Save learned patterns to file with backup and error handling"""
+        """Save learned patterns to file safely with atomic replace and error handling"""
         try:
-            # Create backup of existing file
+            # If nothing changed, avoid touching the file
+            if not getattr(self, '_dirty', False):
+                print("No changes to save; skipping write")
+                return True
+
+            temp_file = self.learned_patterns_file + ".tmp"
+
+            # Write to a temporary file first
+            with open(temp_file, 'w') as f:
+                self._write_formatted_patterns(f, self.learned_patterns)
+
+            # Create/refresh backup of existing file only after successful temp write
             if os.path.exists(self.learned_patterns_file):
                 backup_file = self.learned_patterns_file + ".backup"
                 try:
@@ -616,22 +634,25 @@ class DigitRecognizer:
                 except Exception as backup_error:
                     print(f"Warning: Could not create backup: {backup_error}")
 
-            # Save current patterns with custom formatting
-            with open(self.learned_patterns_file, 'w') as f:
-                self._write_formatted_patterns(f, self.learned_patterns)
+            # Atomically replace the original file
+            os.replace(temp_file, self.learned_patterns_file)
 
             print(f"Learned patterns saved successfully to {self.learned_patterns_file}")
+            self._dirty = False
             return True
 
-        except (IOError, json.JSONEncodeError) as e:
-            print(f"Failed to save learned patterns: {e}")
-            return False
         except Exception as e:
-            print(f"Unexpected error saving patterns: {e}")
+            # Clean up temp file if present
+            try:
+                if 'temp_file' in locals() and os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except Exception:
+                pass
+            print(f"Failed to save learned patterns safely: {e}")
             return False
 
     def _write_formatted_patterns(self, file, patterns_dict):
-        """Write patterns to file with readable array formatting"""
+        """Write patterns to file with readable array formatting, restoring any optimized formats"""
         file.write("{\n")
 
         digit_keys = sorted(patterns_dict.keys(), key=lambda x: int(x))
@@ -651,13 +672,31 @@ class DigitRecognizer:
                         else:
                             file.write(f'      "{key}": {value},\n')
 
+                # Determine actual pattern array from stored representation
+                stored_pattern = pattern_data.get('pattern')
+                try:
+                    if isinstance(stored_pattern, dict) and 'type' in stored_pattern:
+                        # Optimized storage format (sparse, rle, compressed, full)
+                        pattern_array_np = self.restore_pattern_from_storage(stored_pattern)
+                        pattern_array = pattern_array_np.tolist()
+                    elif isinstance(stored_pattern, str) and len(stored_pattern) > 0:
+                        # Legacy compressed string format
+                        decompressed = self.decompress_pattern(stored_pattern)
+                        pattern_array = np.array(decompressed, dtype=int).tolist()
+                    elif isinstance(stored_pattern, np.ndarray):
+                        pattern_array = stored_pattern.astype(int).tolist()
+                    else:
+                        # Assume it's already a list-like array
+                        pattern_array = np.array(stored_pattern, dtype=int).tolist()
+                except Exception as e:
+                    print(f"Error preparing pattern for write (digit {digit}): {e}")
+                    pattern_array = [[0]*self.grid_size for _ in range(self.grid_size)]
+
                 # Write pattern array with grid formatting
                 file.write('      "pattern": [\n')
-                pattern_array = pattern_data['pattern']
-
                 for row_idx, row in enumerate(pattern_array):
                     file.write("        [")
-                    row_str = ",".join(str(val) for val in row)
+                    row_str = ",".join(str(int(val)) for val in row)
                     file.write(row_str)
                     if row_idx < len(pattern_array) - 1:
                         file.write("],\n")
